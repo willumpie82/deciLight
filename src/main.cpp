@@ -58,17 +58,18 @@ void setup() {
 // MAIN LOOP
 //
 void loop() {
-  web_server.handleClient();
+  static unsigned long loop_count = 0;
   
-  sum_queue_t q;
-  if (xQueueReceive(samples_queue, &q, 10 / portTICK_PERIOD_MS) != pdTRUE) {
-    delay(10);
-    return;
+  // Each async handler manages its own timing
+  web_handle_async();                          // Handle web requests (5ms throttle)
+  double level_dB = mic_handle_async();        // Get audio level (non-blocking queue)
+  web_update_level(level_dB);                  // Update web interface
+  led_handle_async(level_dB);                  // Update LEDs (manages decay/response timing)
+  
+  // Log every 5000 cycles to verify loop is running
+  if (++loop_count % 5000 == 0) {
+    log_i("[LOOP] alive: count=%lu dB=%.1f", loop_count, level_dB);
   }
   
-  double level_dB = mic_handle_samples(q);
-  web_update_level(level_dB);
-  led_display_with_config(level_dB, runtime_config);
-  
-  delay(10);
+  yield();  // Allow watchdog & FreeRTOS to handle tasks
 }

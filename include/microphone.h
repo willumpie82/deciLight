@@ -27,4 +27,7 @@ double mic_rms_to_db(float rms);
 void mic_smooth_level(double &smoothed_db, double raw_db, float alpha);
 double mic_handle_samples(const sum_queue_t &q);
 
+// Async handler (fetches queue data and processes)
+double mic_handle_async();
+
 #endif // MICROPHONE_H

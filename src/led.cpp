@@ -258,3 +258,10 @@ void led_display_with_config(double dB_current, const Config& config) {
   
   last_led_update_time = now;
 }
+
+//
+// ASYNC LED HANDLER
+//
+void led_handle_async(double dB_current) {
+  led_display_with_config(dB_current, runtime_config);
+}

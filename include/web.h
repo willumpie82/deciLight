@@ -30,6 +30,9 @@ void web_handle_api_set();
 void web_handle_api_status();
 void web_handle_not_found();
 
+// Async handler (manages own timing)
+void web_handle_async();
+
 // Update current dB level (called from main loop)
 void web_update_level(double dB_current);
 

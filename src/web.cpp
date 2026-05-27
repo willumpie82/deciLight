@@ -21,6 +21,9 @@ Config runtime_config = {
 static double current_dB = 0.0;
 static unsigned long last_dB_update = 0;
 
+// Deferred save flag (set by handler, processed by main loop)
+static bool needs_save = false;
+
 // Web server on port 80
 WebServer web_server(80);
 
@@ -508,15 +511,15 @@ void web_handle_root() {
 void web_handle_api_get() {
   char json[600];
   snprintf(json, sizeof(json),
-    "{\"display_mode\":%d,\"db_floor\":%.1f,\"db_green_switchover\":%.1f,\"db_yellow_switchover\":%.1f,\"led_brightness\":%d,\"color_green\":%u,\"color_yellow\":%u,\"color_red\":%u,\"decay_ms\":%d,\"response_ms\":%d}",
+    "{\"display_mode\":%d,\"db_floor\":%.1f,\"db_normal_switchover\":%.1f,\"db_warning_switchover\":%.1f,\"led_brightness\":%d,\"color_normal\":%u,\"color_warning\":%u,\"color_alert\":%u,\"decay_ms\":%d,\"response_ms\":%d}",
     runtime_config.display_mode,
     runtime_config.db_floor,
-    runtime_config.db_green_switchover,
-    runtime_config.db_yellow_switchover,
+    runtime_config.db_normal_switchover,
+    runtime_config.db_warning_switchover,
     runtime_config.led_brightness,
-    runtime_config.color_green,
-    runtime_config.color_yellow,
-    runtime_config.color_red,
+    runtime_config.color_normal,
+    runtime_config.color_warning,
+    runtime_config.color_alert,
     runtime_config.decay_ms,
     runtime_config.response_ms);
   web_server.send(200, "application/json", json);
@@ -624,12 +627,13 @@ void web_handle_api_set() {
     runtime_config.response_ms = val.toInt();
   }
 
-  web_save_config();
+  // Send response IMMEDIATELY (don't block on NVS writes)
   web_server.send(200, "application/json", "{\"status\":\"ok\"}");
   
-  log_i("Config updated via web: decay=%dms response=%dms",
-    runtime_config.decay_ms,
-    runtime_config.response_ms);
+  // Set flag to save later (outside of handler to avoid blocking)
+  needs_save = true;
+  
+  log_i("Config update received, save pending");
 }
 
 // GET /api/status - return current sound level
@@ -656,6 +660,7 @@ void web_init() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP("NoiseLight", "12345678");  // SSID, Password
   
+
   IPAddress ap_ip = WiFi.softAPIP();
   log_i("WiFi AP Started: http://%s", ap_ip.toString().c_str());
   
@@ -671,4 +676,23 @@ void web_init() {
   
   // Load config from storage
   web_load_config();
+}
+
+// Async web server handler (manages own timing)
+void web_handle_async() {
+  static unsigned long last_save = 0;
+  
+  // Handle web requests on every call (non-blocking)
+  web_server.handleClient();
+  
+  // Check if config save is pending (deferred from handler to avoid blocking)
+  // Only process save if enough time has passed since last save
+  if (needs_save && (millis() - last_save >= 100)) {
+    needs_save = false;
+    last_save = millis();
+    web_save_config();
+    log_i("Config updated via web: decay=%dms response=%dms",
+      runtime_config.decay_ms,
+      runtime_config.response_ms);
+  }
 }

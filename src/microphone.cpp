@@ -137,6 +137,19 @@ double mic_handle_samples(const sum_queue_t &q) {
   return smoothed_dB;
 }
 
+// Async microphone handler (non-blocking queue check + processing)
+double mic_handle_async() {
+  static double current_level = 30.0;
+  
+  sum_queue_t q;
+  // Non-blocking queue check (0ms timeout)
+  if (xQueueReceive(samples_queue, &q, 0) == pdTRUE) {
+    current_level = mic_handle_samples(q);
+  }
+  
+  return current_level;
+}
+
 //
 // SOS IIR FILTER IMPLEMENTATION
 //
