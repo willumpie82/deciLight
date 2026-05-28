@@ -91,6 +91,62 @@ dB_max_default = 60   // Above 60 dB → RED
 | Active classroom | 45 | 70 | Group work sessions |
 | Workshop | 60 | 80 | Tolerate machinery |
 
+## 🌐 WiFi & Web Configuration
+
+### Access Point Mode
+
+The device operates as a **WiFi Access Point (AP)** that you can connect to:
+
+- **SSID (Network Name):** `NoiseLight`
+- **Password:** `12345678`
+- **IP Address:** `192.168.4.1`
+- **Port:** `80` (HTTP)
+
+### Setup Instructions
+
+1. **Connect to the device's WiFi:**
+   - Open your device's WiFi settings (phone, tablet, laptop)
+   - Select network `NoiseLight`
+   - Enter password: `12345678`
+
+2. **Open the configuration page:**
+   - Open browser and go to: `http://192.168.4.1`
+   - The web interface will load automatically
+
+3. **Configure settings in real-time:**
+   - Live dB level display updates every 200ms
+   - All sliders update preview instantly
+   - Press **Save Configuration** to persist settings to device storage
+
+### Web Interface Features
+
+![Noise Light Web Interface](./doc/webUI.jpeg)
+
+**Display Mode**
+- **Traffic Light:** All LEDs show single color (GREEN/YELLOW/RED)
+- **VU Meter:** LEDs create gradient bar showing sound intensity
+
+**LED Settings**
+- **Brightness:** 0–255 (default: 57)
+- **Color Selection:** Choose custom colors for each noise level
+
+**Switchover Points (dB)**
+- **Floor Level:** Noise floor baseline (default: 37 dB)
+- **Green→Yellow:** Transition threshold (default: 52 dB)
+- **Yellow→Red:** Alert threshold (default: 62 dB)
+- **Color Preview:** Visual bar shows LED colors across dB range
+
+**Response Timing**
+- **Decay Time:** How long to hold current color after sound stops (0–3000 ms, default: 2400 ms)
+- **Response Time:** Minimum update interval between LED changes (0–500 ms, default: 50 ms)
+
+### Persistent Storage
+
+All configuration changes are automatically saved to ESP32's **NVS (Non-Volatile Storage)**:
+- Settings survive power loss
+- Load automatically on device startup
+- Accessible via `/api/config` endpoint
+
 ## 🚀 Building & Uploading
 
 ### Prerequisites
