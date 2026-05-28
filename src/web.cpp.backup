@@ -3,347 +3,34 @@
 #include <Preferences.h>
 #include <WiFi.h>
 
-// Global instance
-WebService web_service;
+// Global configuration
+Config runtime_config = {
+  .display_mode = DISPLAY_MODE,
+  .db_floor = DB_FLOOR,
+  .db_normal_switchover = DB_NORMAL_SWITCHOVER,
+  .db_warning_switchover = DB_WARNING_SWITCHOVER,
+  .led_brightness = LED_BRIGHTNESS,
+  .color_normal = 0x00FF00,
+  .color_warning = 0xFFFF00,
+  .color_alert = 0xFF0000,
+  .decay_ms = 1500,
+  .response_ms = 100
+};
 
-// Static pointer for task wrapper (allows access to instance)
-static WebService* g_web_service = nullptr;
+// Current sound level (updated from main loop)
+static double current_dB = 0.0;
+static unsigned long last_dB_update = 0;
 
-// Forward declaration of static HTML UI
-extern const char* html_ui;
+// Deferred save flag (set by handler, processed by web task)
+bool needs_save = false;
 
-//============================================
-// WebService Constructor
-//============================================
-WebService::WebService() 
-  : server(nullptr), 
-    current_dB(0.0), 
-    last_dB_update(0),
-    needs_save(false),
-    task_handle(nullptr)
-{
-  config = {
-    .display_mode = DISPLAY_MODE,
-    .db_floor = DB_FLOOR,
-    .db_normal_switchover = DB_NORMAL_SWITCHOVER,
-    .db_warning_switchover = DB_WARNING_SWITCHOVER,
-    .led_brightness = LED_BRIGHTNESS,
-    .color_normal = 0x00FF00,
-    .color_warning = 0xFFFF00,
-    .color_alert = 0xFF0000,
-    .decay_ms = 1500,
-    .response_ms = 100
-  };
-}
+// Web server on port 80
+WebServer web_server(80);
 
-//============================================
-// WebService::init() - Initialize web server
-//============================================
-void WebService::init() {
-  log_i("[WEB] Initializing web server...");
-  
-  // Create WebServer instance
-  server = new WebServer(80);
-  
-  // Store global pointer for task wrapper
-  g_web_service = this;
-  
-  // Start WiFi in AP mode
-  WiFi.mode(WIFI_AP);
-  log_i("[WEB] WiFi mode set to AP");
-  
-  WiFi.softAP("NoiseLight", "12345678");  // SSID, Password
-  log_i("[WEB] WiFi AP configured");
-  
-  IPAddress ap_ip = WiFi.softAPIP();
-  log_i("[WEB] WiFi AP Started: http://%s", ap_ip.toString().c_str());
-  
-  // Setup web server routes with lambda captures
-  log_i("[WEB] Registering routes...");
-  
-  server->on("/", HTTP_GET, [this]() { this->handleRoot(); });
-  log_i("[WEB] Route / registered");
-  
-  server->on("/api/config", HTTP_GET, [this]() { this->handleApiGet(); });
-  log_i("[WEB] Route /api/config GET registered");
-  
-  server->on("/api/config", HTTP_POST, [this]() { this->handleApiSet(); });
-  log_i("[WEB] Route /api/config POST registered");
-  
-  server->on("/api/status", HTTP_GET, [this]() { this->handleApiStatus(); });
-  log_i("[WEB] Route /api/status registered");
-  
-  server->onNotFound([this]() { this->handleNotFound(); });
-  log_i("[WEB] 404 handler registered");
-  
-  server->begin();
-  log_i("[WEB] Web server started on port 80");
-  
-  // Load config from storage
-  log_i("[WEB] Loading config from NVS...");
-  loadConfig();
-  log_i("[WEB] Config loaded");
-}
+// Persistent storage
+Preferences preferences;
 
-//============================================
-// WebService::startTask() - Create FreeRTOS task
-//============================================
-void WebService::startTask() {
-  log_i("[WEB] Creating WebTask...");
-  
-  BaseType_t ret = xTaskCreatePinnedToCore(
-    WebService::webTaskWrapper,  // Static wrapper function
-    "WebTask",                   // Task name
-    4096,                        // Stack size
-    this,                        // Parameter (pass this pointer)
-    3,                           // Priority
-    &task_handle,                // Task handle
-    0                            // Core 0
-  );
-  
-  if (ret != pdPASS) {
-    log_e("[WEB] Failed to create WebTask!");
-  } else {
-    log_i("[WEB] WebTask created successfully");
-  }
-}
-
-//============================================
-// WebService::webTaskWrapper() - Static task wrapper
-//============================================
-void WebService::webTaskWrapper(void *param) {
-  WebService* pThis = static_cast<WebService*>(param);
-  pThis->webTaskHandler();
-}
-
-//============================================
-// WebService::webTaskHandler() - Instance task handler
-//============================================
-void WebService::webTaskHandler() {
-  log_i("[TASK] WebTask started on core %d", xPortGetCoreID());
-  
-  while (1) {
-    // Handle incoming web requests (non-blocking)
-    if (server) {
-      server->handleClient();
-    }
-    
-    // Check if config save is pending (deferred from HTTP handler)
-    if (needs_save) {
-      needs_save = false;
-      saveConfig();
-      log_i("Config updated via web: decay=%dms response=%dms",
-        config.decay_ms, config.response_ms);
-    }
-    
-    vTaskDelay(pdMS_TO_TICKS(50));  // Yield for 50ms
-  }
-}
-
-//============================================
-// WebService::updateLevel() - Update current dB level
-//============================================
-void WebService::updateLevel(double dB_current) {
-  current_dB = dB_current;
-  last_dB_update = millis();
-}
-
-//============================================
-// HTTP HANDLERS
-//============================================
-
-void WebService::handleRoot() {
-  server->send(200, "text/html", html_ui);
-}
-
-void WebService::handleApiGet() {
-  char json[600];
-  snprintf(json, sizeof(json),
-    "{\"display_mode\":%d,\"db_floor\":%.1f,\"db_normal_switchover\":%.1f,\"db_warning_switchover\":%.1f,\"led_brightness\":%d,\"color_normal\":%u,\"color_warning\":%u,\"color_alert\":%u,\"decay_ms\":%d,\"response_ms\":%d}",
-    config.display_mode,
-    config.db_floor,
-    config.db_normal_switchover,
-    config.db_warning_switchover,
-    config.led_brightness,
-    config.color_normal,
-    config.color_warning,
-    config.color_alert,
-    config.decay_ms,
-    config.response_ms);
-  server->send(200, "application/json", json);
-}
-
-void WebService::handleApiSet() {
-  log_i("[WEB] Config update received");
-  if (!server->hasArg("plain")) {
-    server->send(400, "application/json", "{\"error\":\"No body\"}");
-    return;
-  }
-
-  String body = server->arg("plain");
-  log_i("Received JSON: %s", body.c_str());
-  
-  // Simple JSON parsing
-  int mode_pos = body.indexOf("\"display_mode\":");
-  if (mode_pos >= 0) {
-    config.display_mode = body.substring(mode_pos + 15, mode_pos + 16).toInt();
-  }
-  
-  int floor_pos = body.indexOf("\"db_floor\":");
-  if (floor_pos >= 0) {
-    int end = body.indexOf(",", floor_pos);
-    if (end < 0) end = body.indexOf("}", floor_pos);
-    String val = body.substring(floor_pos + 11, end);
-    config.db_floor = val.toFloat();
-    log_i("Parsed floor: '%s' = %.1f", val.c_str(), config.db_floor);
-  }
-  
-  int green_pos = body.indexOf("\"db_normal_switchover\":");
-  if (green_pos >= 0) {
-    int end = body.indexOf(",", green_pos);
-    if (end < 0) end = body.indexOf("}", green_pos);
-    String val = body.substring(green_pos + 23, end);
-    val.trim();
-    config.db_normal_switchover = val.toFloat();
-    log_i("Parsed normal: '%s' = %.1f", val.c_str(), config.db_normal_switchover);
-  }
-  
-  int yellow_pos = body.indexOf("\"db_warning_switchover\":");
-  if (yellow_pos >= 0) {
-    int end = body.indexOf(",", yellow_pos);
-    if (end < 0) end = body.indexOf("}", yellow_pos);
-    String val = body.substring(yellow_pos + 24, end);
-    val.trim();
-    config.db_warning_switchover = val.toFloat();
-    log_i("Parsed warning: '%s' = %.1f", val.c_str(), config.db_warning_switchover);
-  }
-  
-  int bright_pos = body.indexOf("\"led_brightness\":");
-  if (bright_pos >= 0) {
-    int end = body.indexOf(",", bright_pos);
-    if (end < 0) end = body.indexOf("}", bright_pos);
-    String val = body.substring(bright_pos + 17, end);
-    config.led_brightness = val.toInt();
-  }
-  
-  int col_green_pos = body.indexOf("\"color_normal\":");
-  if (col_green_pos >= 0) {
-    int start = col_green_pos + 15;
-    int end = body.indexOf(",", col_green_pos);
-    if (end < 0) end = body.indexOf("}", col_green_pos);
-    String val = body.substring(start, end);
-    val.trim();
-    uint32_t parsed = strtoul(val.c_str(), NULL, 10);
-    if (parsed > 0) config.color_normal = parsed;
-  }
-  
-  int col_yellow_pos = body.indexOf("\"color_warning\":");
-  if (col_yellow_pos >= 0) {
-    int start = col_yellow_pos + 16;
-    int end = body.indexOf(",", col_yellow_pos);
-    if (end < 0) end = body.indexOf("}", col_yellow_pos);
-    String val = body.substring(start, end);
-    val.trim();
-    uint32_t parsed = strtoul(val.c_str(), NULL, 10);
-    if (parsed > 0) config.color_warning = parsed;
-  }
-  
-  int col_red_pos = body.indexOf("\"color_alert\":");
-  if (col_red_pos >= 0) {
-    int start = col_red_pos + 14;
-    int end = body.indexOf(",", col_red_pos);
-    if (end < 0) end = body.indexOf("}", col_red_pos);
-    String val = body.substring(start, end);
-    val.trim();
-    uint32_t parsed = strtoul(val.c_str(), NULL, 10);
-    if (parsed > 0) config.color_alert = parsed;
-  }
-  
-  int decay_pos = body.indexOf("\"decay_ms\":");
-  if (decay_pos >= 0) {
-    int end = body.indexOf(",", decay_pos);
-    if (end < 0) end = body.indexOf("}", decay_pos);
-    String val = body.substring(decay_pos + 11, end);
-    config.decay_ms = val.toInt();
-  }
-  
-  int response_pos = body.indexOf("\"response_ms\":");
-  if (response_pos >= 0) {
-    int end = body.indexOf(",", response_pos);
-    if (end < 0) end = body.indexOf("}", response_pos);
-    String val = body.substring(response_pos + 14, end);
-    config.response_ms = val.toInt();
-  }
-
-  // Send response IMMEDIATELY (don't block on NVS writes)
-  server->send(200, "application/json", "{\"status\":\"ok\"}");
-  
-  // Set flag to save later (outside of handler)
-  needs_save = true;
-}
-
-void WebService::handleApiStatus() {
-  char json[64];
-  snprintf(json, sizeof(json), "{\"db\":%.1f}", current_dB);
-  server->send(200, "application/json", json);
-}
-
-void WebService::handleNotFound() {
-  server->send(404, "text/plain", "Not Found");
-}
-
-//============================================
-// CONFIG PERSISTENCE
-//============================================
-
-void WebService::loadConfig() {
-  Preferences prefs;
-  prefs.begin("noiselight", true);  // readonly
-  config.display_mode = prefs.getInt("mode", DISPLAY_MODE);
-  config.db_floor = prefs.getFloat("floor", DB_FLOOR);
-  config.db_normal_switchover = prefs.getFloat("normal", DB_NORMAL_SWITCHOVER);
-  config.db_warning_switchover = prefs.getFloat("warning", DB_WARNING_SWITCHOVER);
-  config.led_brightness = prefs.getUChar("brightness", LED_BRIGHTNESS);
-  config.color_normal = prefs.getUInt("col_normal", 0x00FF00);
-  config.color_warning = prefs.getUInt("col_warning", 0xFFFF00);
-  config.color_alert = prefs.getUInt("col_alert", 0xFF0000);
-  config.decay_ms = prefs.getUShort("decay_ms", 1500);
-  config.response_ms = prefs.getUShort("response_ms", 100);
-  prefs.end();
-  
-  log_i("Config loaded: mode=%d decay=%dms response=%dms", 
-    config.display_mode, config.decay_ms, config.response_ms);
-}
-
-void WebService::saveConfig() {
-  Preferences prefs;
-  prefs.begin("noiselight", false);  // readwrite
-  prefs.putInt("mode", config.display_mode);
-  prefs.putFloat("floor", config.db_floor);
-  prefs.putFloat("normal", config.db_normal_switchover);
-  prefs.putFloat("warning", config.db_warning_switchover);
-  prefs.putUChar("brightness", config.led_brightness);
-  prefs.putUInt("col_normal", config.color_normal);
-  prefs.putUInt("col_warning", config.color_warning);
-  prefs.putUInt("col_alert", config.color_alert);
-  prefs.putUShort("decay_ms", config.decay_ms);
-  prefs.putUShort("response_ms", config.response_ms);
-  prefs.end();
-  
-  const char* mode_str = (config.display_mode == 0) ? "TRAFFIC_LIGHT" : "VU_METER";
-  log_i("=== CONFIG SAVED ===");
-  log_i("Mode: %s", mode_str);
-  log_i("Floor: %.1f dB", config.db_floor);
-  log_i("Switchovers: normal=%.1f dB, warning=%.1f dB", 
-    config.db_normal_switchover, config.db_warning_switchover);
-  log_i("LED Brightness: %d", config.led_brightness);
-  log_i("Colors: normal=0x%06X, warning=0x%06X, alert=0x%06X",
-    config.color_normal, config.color_warning, config.color_alert);
-  log_i("Timing: decay=%dms, response=%dms",
-    config.decay_ms, config.response_ms);
-}
-
-// Embedded HTML UI (kept as static const for readability)
+// Embedded HTML UI
 const char* html_ui = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -634,6 +321,7 @@ const char* html_ui = R"rawliteral(
         const data = await res.json();
         document.getElementById('live-db').textContent = data.db.toFixed(1);
         
+        // Calculate bar width (37-80 dB range)
         const minDb = 37;
         const maxDb = 80;
         const normalized = Math.max(0, Math.min(1, (data.db - minDb) / (maxDb - minDb)));
@@ -680,14 +368,14 @@ const char* html_ui = R"rawliteral(
       
       const colors = [];
       for (let i = 0; i < 13; i++) {
-        const dbAtLED = 37 + (i / 12) * 43;
+        const dbAtLED = 37 + (i / 12) * 43; // 37-80 dB range
         let color;
         if (dbAtLED < greenThresh) {
-          color = '#22c55e';
+          color = '#22c55e'; // Green
         } else if (dbAtLED < yellowThresh) {
-          color = '#eab308';
+          color = '#eab308'; // Yellow
         } else {
-          color = '#ef4444';
+          color = '#ef4444'; // Red
         }
         colors.push(`<div class="led" style="background:${color}"></div>`);
       }
@@ -753,10 +441,254 @@ const char* html_ui = R"rawliteral(
 
     window.onload = function() {
       loadConfig();
-      updateLiveLevel();
-      setInterval(updateLiveLevel, 200);
+      updateLiveLevel();  // Initial update
+      setInterval(updateLiveLevel, 200);  // Update every 200ms
     };
   </script>
 </body>
 </html>
 )rawliteral";
+
+// Load config from persistent storage
+void web_load_config() {
+  preferences.begin("noiselight", true);  // readonly
+  runtime_config.display_mode = preferences.getInt("mode", DISPLAY_MODE);
+  runtime_config.db_floor = preferences.getFloat("floor", DB_FLOOR);
+  runtime_config.db_normal_switchover = preferences.getFloat("normal", DB_NORMAL_SWITCHOVER);
+  runtime_config.db_warning_switchover = preferences.getFloat("warning", DB_WARNING_SWITCHOVER);
+  runtime_config.led_brightness = preferences.getUChar("brightness", LED_BRIGHTNESS);
+  runtime_config.color_normal = preferences.getUInt("col_normal", 0x00FF00);
+  runtime_config.color_warning = preferences.getUInt("col_warning", 0xFFFF00);
+  runtime_config.color_alert = preferences.getUInt("col_alert", 0xFF0000);
+  runtime_config.decay_ms = preferences.getUShort("decay_ms", 1500);
+  runtime_config.response_ms = preferences.getUShort("response_ms", 100);
+  preferences.end();
+  
+  log_i("Config loaded: mode=%d decay=%dms response=%dms", 
+    runtime_config.display_mode,
+    runtime_config.decay_ms,
+    runtime_config.response_ms);
+}
+
+// Save config to persistent storage
+void web_save_config() {
+  preferences.begin("noiselight", false);  // readwrite
+  preferences.putInt("mode", runtime_config.display_mode);
+  preferences.putFloat("floor", runtime_config.db_floor);
+  preferences.putFloat("normal", runtime_config.db_normal_switchover);
+  preferences.putFloat("warning", runtime_config.db_warning_switchover);
+  preferences.putUChar("brightness", runtime_config.led_brightness);
+  preferences.putUInt("col_normal", runtime_config.color_normal);
+  preferences.putUInt("col_warning", runtime_config.color_warning);
+  preferences.putUInt("col_alert", runtime_config.color_alert);
+  preferences.putUShort("decay_ms", runtime_config.decay_ms);
+  preferences.putUShort("response_ms", runtime_config.response_ms);
+  preferences.end();
+  
+  const char* mode_str = (runtime_config.display_mode == 0) ? "TRAFFIC_LIGHT" : "VU_METER";
+  log_i("=== CONFIG SAVED ===");
+  log_i("Mode: %s", mode_str);
+  log_i("Floor: %.1f dB", runtime_config.db_floor);
+  log_i("Switchovers: normal=%.1f dB, warning=%.1f dB", 
+    runtime_config.db_normal_switchover,
+    runtime_config.db_warning_switchover);
+  log_i("LED Brightness: %d", runtime_config.led_brightness);
+  log_i("Colors: normal=0x%06X, warning=0x%06X, alert=0x%06X",
+    runtime_config.color_normal,
+    runtime_config.color_warning,
+    runtime_config.color_alert);
+  log_i("Timing: decay=%dms, response=%dms",
+    runtime_config.decay_ms,
+    runtime_config.response_ms);
+}
+
+// Serve main HTML page
+void web_handle_root() {
+  web_server.send(200, "text/html", html_ui);
+}
+
+// GET /api/config - return current config
+void web_handle_api_get() {
+  char json[600];
+  snprintf(json, sizeof(json),
+    "{\"display_mode\":%d,\"db_floor\":%.1f,\"db_normal_switchover\":%.1f,\"db_warning_switchover\":%.1f,\"led_brightness\":%d,\"color_normal\":%u,\"color_warning\":%u,\"color_alert\":%u,\"decay_ms\":%d,\"response_ms\":%d}",
+    runtime_config.display_mode,
+    runtime_config.db_floor,
+    runtime_config.db_normal_switchover,
+    runtime_config.db_warning_switchover,
+    runtime_config.led_brightness,
+    runtime_config.color_normal,
+    runtime_config.color_warning,
+    runtime_config.color_alert,
+    runtime_config.decay_ms,
+    runtime_config.response_ms);
+  web_server.send(200, "application/json", json);
+}
+
+// POST /api/config - update config
+void web_handle_api_set() {
+  log_i("[WEB] Config update received");
+  if (!web_server.hasArg("plain")) {
+    web_server.send(400, "application/json", "{\"error\":\"No body\"}");
+    return;
+  }
+
+  String body = web_server.arg("plain");
+  log_i("Received JSON: %s", body.c_str());
+  
+  // Simple JSON parsing (avoid ArduinoJson for small config)
+  int mode_pos = body.indexOf("\"display_mode\":");
+  if (mode_pos >= 0) {
+    runtime_config.display_mode = body.substring(mode_pos + 15, mode_pos + 16).toInt();
+  }
+  
+  int floor_pos = body.indexOf("\"db_floor\":");
+  if (floor_pos >= 0) {
+    int end = body.indexOf(",", floor_pos);
+    if (end < 0) end = body.indexOf("}", floor_pos);
+    String val = body.substring(floor_pos + 11, end);
+    runtime_config.db_floor = val.toFloat();
+    log_i("Parsed floor: '%s' = %.1f", val.c_str(), runtime_config.db_floor);
+  }
+  
+  int green_pos = body.indexOf("\"db_normal_switchover\":");
+  if (green_pos >= 0) {
+    int end = body.indexOf(",", green_pos);
+    if (end < 0) end = body.indexOf("}", green_pos);
+    String val = body.substring(green_pos + 23, end);
+    val.trim();
+    runtime_config.db_normal_switchover = val.toFloat();
+    log_i("Parsed normal: '%s' = %.1f", val.c_str(), runtime_config.db_normal_switchover);
+  }
+  
+  int yellow_pos = body.indexOf("\"db_warning_switchover\":");
+  if (yellow_pos >= 0) {
+    int end = body.indexOf(",", yellow_pos);
+    if (end < 0) end = body.indexOf("}", yellow_pos);
+    String val = body.substring(yellow_pos + 24, end);
+    val.trim();
+    runtime_config.db_warning_switchover = val.toFloat();
+    log_i("Parsed warning: '%s' = %.1f", val.c_str(), runtime_config.db_warning_switchover);
+  }
+  
+  int bright_pos = body.indexOf("\"led_brightness\":");
+  if (bright_pos >= 0) {
+    int end = body.indexOf(",", bright_pos);
+    if (end < 0) end = body.indexOf("}", bright_pos);
+    String val = body.substring(bright_pos + 17, end);
+    runtime_config.led_brightness = val.toInt();
+  }
+  
+  int col_green_pos = body.indexOf("\"color_normal\":");
+  if (col_green_pos >= 0) {
+    int start = col_green_pos + 15;  // Skip past "color_normal":
+    int end = body.indexOf(",", col_green_pos);
+    if (end < 0) end = body.indexOf("}", col_green_pos);
+    String val = body.substring(start, end);
+    val.trim();
+    uint32_t parsed = strtoul(val.c_str(), NULL, 10);
+    if (parsed > 0) runtime_config.color_normal = parsed;
+  }
+  
+  int col_yellow_pos = body.indexOf("\"color_warning\":");
+  if (col_yellow_pos >= 0) {
+    int start = col_yellow_pos + 16;  // Skip past "color_warning":
+    int end = body.indexOf(",", col_yellow_pos);
+    if (end < 0) end = body.indexOf("}", col_yellow_pos);
+    String val = body.substring(start, end);
+    val.trim();
+    uint32_t parsed = strtoul(val.c_str(), NULL, 10);
+    if (parsed > 0) runtime_config.color_warning = parsed;
+  }
+  
+  int col_red_pos = body.indexOf("\"color_alert\":");
+  if (col_red_pos >= 0) {
+    int start = col_red_pos + 14;  // Skip past "color_alert":
+    int end = body.indexOf(",", col_red_pos);
+    if (end < 0) end = body.indexOf("}", col_red_pos);
+    String val = body.substring(start, end);
+    val.trim();
+    uint32_t parsed = strtoul(val.c_str(), NULL, 10);
+    if (parsed > 0) runtime_config.color_alert = parsed;
+  }
+  
+  int decay_pos = body.indexOf("\"decay_ms\":");
+  if (decay_pos >= 0) {
+    int end = body.indexOf(",", decay_pos);
+    if (end < 0) end = body.indexOf("}", decay_pos);
+    String val = body.substring(decay_pos + 11, end);
+    runtime_config.decay_ms = val.toInt();
+  }
+  
+  int response_pos = body.indexOf("\"response_ms\":");
+  if (response_pos >= 0) {
+    int end = body.indexOf(",", response_pos);
+    if (end < 0) end = body.indexOf("}", response_pos);
+    String val = body.substring(response_pos + 14, end);
+    runtime_config.response_ms = val.toInt();
+  }
+
+  // Send response IMMEDIATELY (don't block on NVS writes)
+  web_server.send(200, "application/json", "{\"status\":\"ok\"}");
+  
+  // Set flag to save later (outside of handler to avoid blocking)
+  needs_save = true;
+}
+
+// GET /api/status - return current sound level
+void web_handle_api_status() {
+  char json[64];
+  snprintf(json, sizeof(json), "{\"db\":%.1f}", current_dB);
+  web_server.send(200, "application/json", json);
+}
+
+// Update current dB level from main loop
+void web_update_level(double dB_current) {
+  current_dB = dB_current;
+  last_dB_update = millis();
+}
+
+// 404 handler
+void web_handle_not_found() {
+  web_server.send(404, "text/plain", "Not Found");
+}
+
+// Initialize web server
+void web_init() {
+  log_i("[WEB] Initializing web server...");
+  
+  // Start WiFi in AP mode
+  WiFi.mode(WIFI_AP);
+  log_i("[WEB] WiFi mode set to AP");
+  
+  WiFi.softAP("NoiseLight", "12345678");  // SSID, Password
+  log_i("[WEB] WiFi AP configured");
+  
+  IPAddress ap_ip = WiFi.softAPIP();
+  log_i("[WEB] WiFi AP Started: http://%s", ap_ip.toString().c_str());
+  
+  // Setup web server routes
+  log_i("[WEB] Registering routes...");
+  web_server.on("/", HTTP_GET, web_handle_root);
+  log_i("[WEB] Route / registered");
+  
+  web_server.on("/api/config", HTTP_GET, web_handle_api_get);
+  log_i("[WEB] Route /api/config GET registered");
+  
+  web_server.on("/api/config", HTTP_POST, web_handle_api_set);
+  log_i("[WEB] Route /api/config POST registered");
+  
+  web_server.on("/api/status", HTTP_GET, web_handle_api_status);
+  log_i("[WEB] Route /api/status registered");
+  
+  web_server.onNotFound(web_handle_not_found);
+  log_i("[WEB] 404 handler registered");
+  
+  web_server.begin();
+  log_i("[WEB] Web server started on port 80");
+  
+  // Load config from storage
+  log_i("[WEB] Loading config from NVS...");
+  web_load_config();
+  log_i("[WEB] Config loaded");
+}

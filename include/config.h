@@ -16,7 +16,7 @@ enum NoiseLevel {
 // PIN CONFIGURATION - ESP32 Noise Light
 //
 #define DATA_PIN 2              // WS2812 LED strip (12 LEDs)
-#define I2S_LR 4                // I2S L/R Select - GREEN wire (HIGH=RIGHT, LOW=LEFT)
+#define I2S_LR 4                // I2S L/R Select - GREEN wire (set HIGH=RIGHT channel)
 #define I2S_WS 5                // I2S Word Select (L/R Clock) - BLUE wire
 #define I2S_SCK 6               // I2S Serial Clock (BCLK) - WHITE wire
 #define I2S_SD 7                // I2S Serial Data - YELLOW wire

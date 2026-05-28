@@ -2,6 +2,7 @@
 #define WEB_H
 
 #include <WebServer.h>
+#include <freertos/FreeRTOS.h>
 
 // Configuration structure for runtime settings
 struct Config {
@@ -17,21 +18,44 @@ struct Config {
   uint16_t response_ms;    // Min time between LED updates (0-500ms)
 };
 
-extern Config runtime_config;
-extern WebServer web_server;
-extern bool needs_save;  // Flag set by HTTP handler, processed by web task
+//
+// WebService Class - Manages HTTP server and config persistence
+//
+class WebService {
+public:
+  WebService();
+  void init();              // Initialize WiFi AP and HTTP server
+  void startTask();         // Create and start the web task
+  void updateLevel(double dB_current);  // Update current dB level for status endpoint
 
-// Web server functions
-void web_init();
-void web_load_config();
-void web_save_config();
-void web_handle_root();
-void web_handle_api_get();
-void web_handle_api_set();
-void web_handle_api_status();
-void web_handle_not_found();
+private:
+  static void webTaskWrapper(void *param);  // Static task wrapper
+  void webTaskHandler();    // Instance task handler
+  
+  // HTTP handler methods
+  void handleRoot();
+  void handleApiGet();
+  void handleApiSet();
+  void handleApiStatus();
+  void handleNotFound();
 
-// Update current dB level (called from LED task)
-void web_update_level(double dB_current);
+  // Configuration methods
+  void loadConfig();
+  void saveConfig();
+
+  // Member variables
+  WebServer *server;
+  double current_dB;
+  unsigned long last_dB_update;
+  bool needs_save;
+  TaskHandle_t task_handle;
+
+public:
+  // Public config (accessed from main loop)
+  Config config;
+};
+
+// Global instance
+extern WebService web_service;
 
 #endif // WEB_H

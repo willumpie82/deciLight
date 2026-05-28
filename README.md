@@ -21,7 +21,8 @@ A real-time noise monitor that displays sound levels as a traffic light using RG
 | Component | Pin | Color | Description |
 |-----------|-----|-------|-------------|
 | **WS2812 LED Data** | GPIO 2 | - | NeoPixel strip (12 LEDs) |
-| **I2S Word Select** | GPIO 4 | Green | Microphone L/R clock |
+| **I2S L/R Select** | GPIO 4 | Green | Microphone channel select (set HIGH = RIGHT channel) |
+| **I2S Word Select** | GPIO 5 | Blue | Microphone L/R clock |
 | **I2S Serial Clock** | GPIO 6 | White | Microphone bit clock |
 | **I2S Serial Data** | GPIO 7 | Yellow | Microphone audio data |
 | **Power (5V)** | 5V | - | USB power supply |
@@ -32,9 +33,10 @@ A real-time noise monitor that displays sound levels as a traffic light using RG
 ```
 ESP32                          I2S Microphone (e.g., INMP441)
 ───────                        ──────────────────
-GPIO 4 (green) ───────────────→ WS (L/R Clock)
-GPIO 6 (white) ───────────────→ SCK (Bit Clock)
-GPIO 7 (yellow)───────────────→ SD (Serial Data)
+GPIO 4 (green, HIGH)───────────→ L/R (channel select = RIGHT)
+GPIO 5 (blue) ─────────────────→ WS (L/R Clock)
+GPIO 6 (white) ─────────────────→ SCK (Bit Clock)
+GPIO 7 (yellow)─────────────────→ SD (Serial Data)
 GND ───────────────────────────→ GND
 3V3 ───────────────────────────→ VDD (if 3.3V version)
 ```
