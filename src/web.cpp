@@ -21,8 +21,8 @@ Config runtime_config = {
 static double current_dB = 0.0;
 static unsigned long last_dB_update = 0;
 
-// Deferred save flag (set by handler, processed by main loop)
-static bool needs_save = false;
+// Deferred save flag (set by handler, processed by web task)
+bool needs_save = false;
 
 // Web server on port 80
 WebServer web_server(80);
@@ -527,6 +527,7 @@ void web_handle_api_get() {
 
 // POST /api/config - update config
 void web_handle_api_set() {
+  log_i("[WEB] Config update received");
   if (!web_server.hasArg("plain")) {
     web_server.send(400, "application/json", "{\"error\":\"No body\"}");
     return;
@@ -632,8 +633,6 @@ void web_handle_api_set() {
   
   // Set flag to save later (outside of handler to avoid blocking)
   needs_save = true;
-  
-  log_i("Config update received, save pending");
 }
 
 // GET /api/status - return current sound level
@@ -656,43 +655,40 @@ void web_handle_not_found() {
 
 // Initialize web server
 void web_init() {
+  log_i("[WEB] Initializing web server...");
+  
   // Start WiFi in AP mode
   WiFi.mode(WIFI_AP);
-  WiFi.softAP("NoiseLight", "12345678");  // SSID, Password
+  log_i("[WEB] WiFi mode set to AP");
   
-
+  WiFi.softAP("NoiseLight", "12345678");  // SSID, Password
+  log_i("[WEB] WiFi AP configured");
+  
   IPAddress ap_ip = WiFi.softAPIP();
-  log_i("WiFi AP Started: http://%s", ap_ip.toString().c_str());
+  log_i("[WEB] WiFi AP Started: http://%s", ap_ip.toString().c_str());
   
   // Setup web server routes
+  log_i("[WEB] Registering routes...");
   web_server.on("/", HTTP_GET, web_handle_root);
+  log_i("[WEB] Route / registered");
+  
   web_server.on("/api/config", HTTP_GET, web_handle_api_get);
+  log_i("[WEB] Route /api/config GET registered");
+  
   web_server.on("/api/config", HTTP_POST, web_handle_api_set);
+  log_i("[WEB] Route /api/config POST registered");
+  
   web_server.on("/api/status", HTTP_GET, web_handle_api_status);
+  log_i("[WEB] Route /api/status registered");
+  
   web_server.onNotFound(web_handle_not_found);
+  log_i("[WEB] 404 handler registered");
   
   web_server.begin();
-  log_i("Web server started on port 80");
+  log_i("[WEB] Web server started on port 80");
   
   // Load config from storage
+  log_i("[WEB] Loading config from NVS...");
   web_load_config();
-}
-
-// Async web server handler (manages own timing)
-void web_handle_async() {
-  static unsigned long last_save = 0;
-  
-  // Handle web requests on every call (non-blocking)
-  web_server.handleClient();
-  
-  // Check if config save is pending (deferred from handler to avoid blocking)
-  // Only process save if enough time has passed since last save
-  if (needs_save && (millis() - last_save >= 100)) {
-    needs_save = false;
-    last_save = millis();
-    web_save_config();
-    log_i("Config updated via web: decay=%dms response=%dms",
-      runtime_config.decay_ms,
-      runtime_config.response_ms);
-  }
+  log_i("[WEB] Config loaded");
 }
