@@ -12,7 +12,6 @@ A real-time noise monitor that displays sound levels as a traffic light using RG
 - **12 NeoPixel RGB LED strip** for bright, visible feedback
 - **A-weighted sound level measurement** (dBA) for realistic perception
 - **Configurable thresholds** via persistent storage
-- **Designed for classroom environments** (student noise management)
 
 ## 🔧 Hardware Setup
 
